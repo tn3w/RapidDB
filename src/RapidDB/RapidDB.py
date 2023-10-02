@@ -116,3 +116,21 @@ class Hashing:
         comparison_hash = Hashing(salt=salt).hash(plain_text, hash_length = hash_length).split("//")[0]
 
         return comparison_hash == hash
+
+class NoEncryption:
+    """
+    A class that does virtually nothing
+    """
+
+    def __init__(self):
+        pass
+
+    @property
+    def use_hashing():
+        return False
+    
+    def encrypt(self: Optional["NoEncryption"] = None, plain_text: str = None) -> str:
+        return plain_text
+    
+    def decrypt(self: Optional["NoEncryption"] = None, cipher_chat: str = None) -> str:
+        return cipher_chat
