@@ -1,14 +1,18 @@
 import os
 import json
+import random
 import secrets
+import requests
+import pkg_resources
 from threading import Lock
-from base64 import b64encode, b64decode, urlsafe_b64decode, urlsafe_b64encode
+from urllib.parse import quote
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, padding, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa, padding as asy_padding
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes, padding, serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from typing import Union, Optional, Tuple
+from base64 import b64encode, b64decode, urlsafe_b64decode, urlsafe_b64encode
+from cryptography.hazmat.primitives.asymmetric import rsa, padding as asy_padding
+from typing import Union, Optional, Tuple, Final
 
 file_locks = dict()
 
@@ -322,3 +326,97 @@ class AsymmetricEncryption:
         plain_text = SymmetricEncryption(symmetric_key).decrypt(cipher_text)
 
         return plain_text
+
+CURRENT_DIR: Final[str] = pkg_resources.resource_filename("RapidDB", "")
+TABLES_DIR: Final[str] = os.path.join(CURRENT_DIR, "tables")
+RANDOM_VERBS: Final[list] = ["explore", "discover", "decorate", "whisper", "navigate", "calculate", "promote", "activate", "celebrate", "entertain", "harvest", "invent", "evaluate", "illuminate", "participate", "introduce", "persuade", "generate", "negotiate", "appreciate", "complement", "enthusiasm", "investigate", "encourage", "volunteer", "photograph", "celebration", "accompany", "experience", "understand", "accomplish", "demonstrate", "celebrity", "experience", "strengthen", "criticize", "communicate", "contribute", "distinguish", "elaborate", "illustrate", "manipulate", "acknowledge", "accelerate", "celebratory", "determination", "negotiation"]
+RANDOM_NOUNS: Final[list] = ["banana", "elephant", "octopus", "giraffe", "sunshine", "computer", "keyboard", "waterfall", "cucumber", "butterfly", "umbrella", "cooker", "mountain", "firework", "sandwich", "backpack", "calendar", "laughter", "pineapple", "scissors", "sweater", "happiness", "telescope", "notebook", "telephone", "suitcase", "chocolate", "elephant", "sunflower", "sunrise", "helicopter", "treasure", "alligator", "volcano", "whale", "elephant", "tiger", "ocean", "zebra", "dolphin", "moonlight", "hamburger", "sunscreen", "umbrella", "rainbow", "guitar", "keyboard"]
+
+if not os.path.isdir(TABLES_DIR):
+    os.mkdir(TABLES_DIR)
+
+class DB:
+
+    def __init__(self, table_name: Optional[str] = None, 
+                 encryption: Union[NoEncryption, SymmetricEncryption, AsymmetricEncryption] = NoEncryption(),
+                 web_service_url: Optional[str] = None,
+                 authorization_password: Optional[str] = None):
+        """
+        :param table_name: The table name of the requested table, if it does not exist a new one will be created, if None a random table will be created
+        :param encryption: Whether and how the table should be decrypted
+        :param web_service_url: If given, tables are stored on a web service
+        :param authorization_password: Gives the web service an authorization password if needed
+        """
+
+        encryption_class_name = encryption.__class__.__name__
+        tables = self.tables
+
+        self.encryption = self.encryption
+        self.encryption_class_name = encryption_class_name
+        self.web_service_url = web_service_url
+        self.authorization_password = authorization_password
+
+        if not table_name in [table["name"] for table in tables]:
+            if table_name == None:
+                table_name = random.choice(RANDOM_VERBS) + "_" + random.choice(RANDOM_NOUNS)
+
+                while table_name in [table["name"] for table in tables]:
+                    table_name = random.choice(RANDOM_VERBS) + "_" + random.choice(RANDOM_NOUNS)
+
+            self.table_name = table_name
+            self.table_path = os.path.join(TABLES_DIR, table_name, ".table")
+
+            with open(self.table_path, "w") as writeable_file:
+                writeable_file.write(encryption_class_name + "--")
+        
+        else:
+            self.table_name = table_name
+            self.table_path = os.path.join(TABLES_DIR, table_name, ".table")
+
+            with open(self.table_path, "r") as readable_file:
+                file_content = readable_file.read()
+            
+            if not encryption_class_name == file_content.split("--")[0]:
+                raise Exception("[Database Encryption Exception] The specified encryption class cannot decrypt the given table / the table was not created with it.")
+    
+    def _request_web_service(self, endpoint: str):
+        """
+        Function for authorized request of the web service with a specific endpoint
+        :param endpoint: The Requested Endpoint
+        """
+
+        request_url = self.web_service_url + endpoint
+        if not self.authorization_password is None:
+            hashed_password = Hashing().hash(self.authorization_password)
+
+            special_character = "?"
+            if "?" in request_url:
+                special_character = "&"
+
+            request_url += special_character + "authorization=" + quote(hashed_password)
+
+        response = requests.get(request_url).json()
+
+        if not response["status_code"] == 200:
+            raise Exception("[WebService Request Exception] " + response["error"])
+        
+        return response
+
+    @property
+    def tables(self):
+        if not self.web_service_url is None:
+            response = self._request_web_service("/tables")
+            return response["tables"]
+        else:
+            files = []
+            for file in os.listdir(TABLES_DIR):
+                if file.endswith(".table"):
+                    with open(file, "r") as readable_file:
+                        file_content = readable_file.read()
+                    
+                    files.append({
+                        "name": file.replace(".table", ""),
+                        "encryption": file_content.split("--")[0]
+                    })
+            
+            return files
