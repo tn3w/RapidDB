@@ -2,12 +2,13 @@ import os
 import json
 import secrets
 from threading import Lock
-from base64 import urlsafe_b64decode, urlsafe_b64encode
+from base64 import b64encode, b64decode, urlsafe_b64decode, urlsafe_b64encode
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes, padding
+from cryptography.hazmat.primitives import hashes, padding, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa, padding as asy_padding
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from typing import Union, Optional
+from typing import Union, Optional, Tuple
 
 file_locks = dict()
 
@@ -212,3 +213,112 @@ class SymmetricEncryption:
         plaintext = unpadder.update(decrypted_data) + unpadder.finalize()
 
         return plaintext.decode()
+
+class AsymmetricEncryption:
+    """
+    Implementation of secure asymmetric encryption with RSA
+    """
+
+    def __init__(self, public_key: Optional[str] = None, private_key: Optional[str] = None):
+        """
+        :param public_key: The public key to encrypt a message / to verify a signature
+        :param private_key: The private key to decrypt a message / to create a signature
+        """
+        
+        self.public_key, self.private_key = public_key, private_key
+
+        if not public_key is None:
+            self.publ_key = serialization.load_der_public_key(b64decode(public_key), backend=default_backend())
+        else:
+            self.publ_key = None
+
+        if not private_key is None:
+            self.priv_key = serialization.load_der_private_key(b64decode(private_key), password=None, backend=default_backend())
+        else:
+            self.priv_key = None
+
+    @property
+    def use_hashing():
+        return True
+
+    def generate_keys(self, key_size: int = 2048) -> "AsymmetricEncryption":
+        """
+        Generates private and public key
+
+        :param key_size: The key size of the private key
+        """
+        self.priv_key = rsa.generate_private_key(
+            public_exponent=65537,
+            key_size=key_size,
+            backend=default_backend()
+        )
+        self.private_key = b64encode(self.priv_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )).decode('utf-8')
+        
+        self.publ_key = self.priv_key.public_key()
+        self.public_key = b64encode(self.publ_key.public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        )).decode('utf-8')
+
+        return self
+    
+    def encrypt(self, plain_text: str) -> Tuple[str, str]:
+        """
+        Encrypt the provided plain_text using asymmetric and symmetric encryption
+
+        :param plain_text: The text to be encrypted
+        """
+
+        if self.publ_key is None:
+            raise ValueError("The public key cannot be None in encode, this error occurs because no public key was specified when initializing the AsymmetricCrypto function and none was generated with generate_keys.")
+
+        symmetric_key = secrets.token_bytes(128)
+
+        cipher_text = SymmetricEncryption(symmetric_key).encrypt(plain_text)
+
+        encrypted_symmetric_key = self.publ_key.encrypt(
+            symmetric_key,
+            asy_padding.OAEP(
+                mgf = asy_padding.MGF1(
+                    algorithm = hashes.SHA256()
+                ),
+                algorithm = hashes.SHA256(),
+                label = None
+            )
+        )
+
+        # Combine and encode the encrypted key and the encrypted text
+        encrypted_key = b64encode(encrypted_symmetric_key).decode('utf-8')
+        return f"{encrypted_key}//{cipher_text}"
+
+    def decrypt(self, cipher_text: str) -> str:
+        """
+        Decrypt the provided cipher_text using asymmetric and symmetric decryption
+
+        :param cipher_text: The encrypted message with the encrypted symmetric key
+        """
+
+        if self.priv_key is None:
+            raise ValueError("The private key cannot be None in decode, this error occurs because no private key was specified when initializing the AsymmetricCrypto function and none was generated with generate_keys.")
+
+        encrypted_key, cipher_text = cipher_text.split("//")[0], cipher_text.split("//")[1]
+        encrypted_symmetric_key = b64decode(encrypted_key.encode('utf-8'))
+
+        symmetric_key = self.priv_key.decrypt(
+            encrypted_symmetric_key, 
+            asy_padding.OAEP(
+                mgf = asy_padding.MGF1(
+                    algorithm=hashes.SHA256()
+                ),
+                algorithm = hashes.SHA256(),
+                label = None
+            )
+        )
+
+        plain_text = SymmetricEncryption(symmetric_key).decrypt(cipher_text)
+
+        return plain_text
