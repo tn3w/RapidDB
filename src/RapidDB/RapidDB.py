@@ -4,8 +4,9 @@ import secrets
 from threading import Lock
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, padding
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from typing import Union, Optional
 
 file_locks = dict()
@@ -134,3 +135,80 @@ class NoEncryption:
     
     def decrypt(self: Optional["NoEncryption"] = None, cipher_chat: str = None) -> str:
         return cipher_chat
+
+class SymmetricEncryption:
+    """
+    Implementation of symmetric encryption with AES
+    """
+
+    def __init__(self, password: Optional[str] = None, salt_length: int = 32):
+        """
+        :param password: A secure encryption password, should be at least 16 characters long
+        :param salt_length: The length of the salt, should be at least 16
+        """
+
+        if password is None:
+            password = secrets.token_urlsafe(64)
+
+        self.password = password.encode()
+        self.salt_length = salt_length
+
+    @property
+    def use_hashing():
+        return True
+
+    def encrypt(self, plain_text: str) -> str:
+        """
+        Encrypts a text
+
+        :param plaintext: The text to be encrypted
+        """
+
+        salt = secrets.token_bytes(self.salt_length)
+
+        kdf_ = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = kdf_.derive(self.password)
+
+        iv = secrets.token_bytes(16)
+
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        padder = padding.PKCS7(algorithms.AES.block_size).padder()
+        padded_data = padder.update(plain_text.encode()) + padder.finalize()
+        ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+
+        return urlsafe_b64encode(salt + iv + ciphertext).decode()
+
+    def decrypt(self, cipher_text: str) -> str:
+        """
+        Decrypts a text
+
+        :param ciphertext: The encrypted text
+        """
+
+        cipher_text = urlsafe_b64decode(cipher_text.encode())
+
+        salt, iv, cipher_text = cipher_text[:self.salt_length], cipher_text[self.salt_length:self.salt_length + 16], cipher_text[self.salt_length + 16:]
+
+        kdf_ = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+            backend=default_backend()
+        )
+        key = kdf_.derive(self.password)
+
+        cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+        decryptor = cipher.decryptor()
+        unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
+        decrypted_data = decryptor.update(cipher_text) + decryptor.finalize()
+        plaintext = unpadder.update(decrypted_data) + unpadder.finalize()
+
+        return plaintext.decode()
