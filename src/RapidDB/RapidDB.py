@@ -330,8 +330,7 @@ class AsymmetricEncryption:
 
         return plain_text
 
-#CURRENT_DIR: Final[str] = pkg_resources.resource_filename("RapidDB", "")
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+CURRENT_DIR: Final[str] = pkg_resources.resource_filename("RapidDB", "")
 TABLES_DIR: Final[str] = os.path.join(CURRENT_DIR, "tables")
 RANDOM_VERBS: Final[list] = ["explore", "discover", "decorate", "whisper", "navigate", "calculate", "promote", "activate", "celebrate", "entertain", "harvest", "invent", "evaluate", "illuminate", "participate", "introduce", "persuade", "generate", "negotiate", "appreciate", "complement", "enthusiasm", "investigate", "encourage", "volunteer", "photograph", "celebration", "accompany", "experience", "understand", "accomplish", "demonstrate", "celebrity", "experience", "strengthen", "criticize", "communicate", "contribute", "distinguish", "elaborate", "illustrate", "manipulate", "acknowledge", "accelerate", "celebratory", "determination", "negotiation"]
 RANDOM_NOUNS: Final[list] = ["banana", "elephant", "octopus", "giraffe", "sunshine", "computer", "keyboard", "waterfall", "cucumber", "butterfly", "umbrella", "cooker", "mountain", "firework", "sandwich", "backpack", "calendar", "laughter", "pineapple", "scissors", "sweater", "happiness", "telescope", "notebook", "telephone", "suitcase", "chocolate", "elephant", "sunflower", "sunrise", "helicopter", "treasure", "alligator", "volcano", "whale", "elephant", "tiger", "ocean", "zebra", "dolphin", "moonlight", "hamburger", "sunscreen", "umbrella", "rainbow", "guitar", "keyboard"]
