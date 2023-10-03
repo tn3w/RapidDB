@@ -138,8 +138,8 @@ class NoEncryption:
     def encrypt(self: Optional["NoEncryption"] = None, plain_text: str = None) -> str:
         return plain_text
     
-    def decrypt(self: Optional["NoEncryption"] = None, cipher_chat: str = None) -> str:
-        return cipher_chat
+    def decrypt(self: Optional["NoEncryption"] = None, cipher_text: str = None) -> str:
+        return cipher_text
 
 class SymmetricEncryption:
     """
@@ -335,7 +335,7 @@ RANDOM_NOUNS: Final[list] = ["banana", "elephant", "octopus", "giraffe", "sunshi
 if not os.path.isdir(TABLES_DIR):
     os.mkdir(TABLES_DIR)
 
-class DB:
+class DB(dict):
 
     def __init__(self, table_name: Optional[str] = None, 
                  encryption: Union[NoEncryption, SymmetricEncryption, AsymmetricEncryption] = NoEncryption(),
@@ -347,11 +347,12 @@ class DB:
         :param web_service_url: If given, tables are stored on a web service
         :param authorization_password: Gives the web service an authorization password if needed
         """
+        super().__init__()
 
         encryption_class_name = encryption.__class__.__name__
         tables = self.tables
 
-        self.encryption = self.encryption
+        self.encryption = encryption
         self.encryption_class_name = encryption_class_name
         self.web_service_url = web_service_url
         self.authorization_password = authorization_password
@@ -379,6 +380,24 @@ class DB:
             if not encryption_class_name == file_content.split("--")[0]:
                 raise Exception("[Database Encryption Exception] The specified encryption class cannot decrypt the given table / the table was not created with it.")
     
+    @property
+    def tables(self):
+        if not self.web_service_url is None:
+            response = self._request_web_service("/tables")
+            return response["tables"]
+        files = []
+        for file in os.listdir(TABLES_DIR):
+            if file.endswith(".table"):
+                with open(os.path.join(TABLES_DIR, file), "r") as readable_file:
+                    file_content = readable_file.read()
+                
+                files.append({
+                    "name": file.replace(".table", ""),
+                    "encryption": file_content.split("--")[0]
+                })
+        
+        return files
+    
     def _request_web_service(self, endpoint: str):
         """
         Function for authorized request of the web service with a specific endpoint
@@ -402,21 +421,17 @@ class DB:
         
         return response
 
-    @property
-    def tables(self):
+    def _get(self, decrypt: bool = False) -> dict:
         if not self.web_service_url is None:
-            response = self._request_web_service("/tables")
-            return response["tables"]
-        else:
-            files = []
-            for file in os.listdir(TABLES_DIR):
-                if file.endswith(".table"):
-                    with open(file, "r") as readable_file:
-                        file_content = readable_file.read()
-                    
-                    files.append({
-                        "name": file.replace(".table", ""),
-                        "encryption": file_content.split("--")[0]
-                    })
-            
-            return files
+            table_content = self._request_web_service("/get?table=" + self.table_name)
+            if decrypt:
+                table_content = self.encryption.decrypt(table_content)
+            return json.loads(table_content)
+        
+        with open(self.table_path, "r") as readable_file:
+            table_content = readable_file.read()
+        
+        if decrypt:
+            table_content = self.encryption.decrypt(table_content)
+        
+        return json.loads(table_content)
