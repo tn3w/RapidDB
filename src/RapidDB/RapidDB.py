@@ -340,13 +340,16 @@ class DB(dict):
     def __init__(self, table_name: Optional[str] = None, 
                  encryption: Union[NoEncryption, SymmetricEncryption, AsymmetricEncryption] = NoEncryption(),
                  web_service_url: Optional[str] = None,
-                 authorization_password: Optional[str] = None):
+                 authorization_password: Optional[str] = None,
+                 tables_directory: Optional[str] = TABLES_DIR):
         """
         :param table_name: The table name of the requested table, if it does not exist a new one will be created, if None a random table will be created
         :param encryption: Whether and how the table should be decrypted
         :param web_service_url: If given, tables are stored on a web service
         :param authorization_password: Gives the web service an authorization password if needed
+        :param tables_directory: Specifies where tables should be stored
         """
+
         super().__init__()
 
         encryption_class_name = encryption.__class__.__name__
@@ -356,6 +359,7 @@ class DB(dict):
         self.encryption_class_name = encryption_class_name
         self.web_service_url = web_service_url
         self.authorization_password = authorization_password
+        self.tables_directory = tables_directory
 
         if not table_name in [table["name"] for table in tables]:
             if table_name == None:
@@ -365,14 +369,14 @@ class DB(dict):
                     table_name = random.choice(RANDOM_VERBS) + "_" + random.choice(RANDOM_NOUNS)
 
             self.table_name = table_name
-            self.table_path = os.path.join(TABLES_DIR, table_name, ".table")
+            self.table_path = os.path.join(self.tables_directory, table_name, ".table")
 
             with open(self.table_path, "w") as writeable_file:
                 writeable_file.write(encryption_class_name + "--")
         
         else:
             self.table_name = table_name
-            self.table_path = os.path.join(TABLES_DIR, table_name, ".table")
+            self.table_path = os.path.join(self.tables_directory, table_name, ".table")
 
             with open(self.table_path, "r") as readable_file:
                 file_content = readable_file.read()
@@ -382,13 +386,18 @@ class DB(dict):
     
     @property
     def tables(self):
+        """
+        Returns all tables
+        """
+
         if not self.web_service_url is None:
             response = self._request_web_service("/tables")
             return response["tables"]
+        
         files = []
-        for file in os.listdir(TABLES_DIR):
+        for file in os.listdir(self.tables_directory):
             if file.endswith(".table"):
-                with open(os.path.join(TABLES_DIR, file), "r") as readable_file:
+                with open(os.path.join(self.tables_directory, file), "r") as readable_file:
                     file_content = readable_file.read()
                 
                 files.append({
@@ -421,17 +430,47 @@ class DB(dict):
         
         return response
 
-    def _get(self, decrypt: bool = False) -> dict:
+    def _get(self, decrypt: bool = False) -> Union[dict, str]:
+        """
+        Function to get the content of the current table
+        :param decrypt: Whether to decrypt the table
+        """
+
         if not self.web_service_url is None:
             table_content = self._request_web_service("/get?table=" + self.table_name)
+
             if decrypt:
-                table_content = self.encryption.decrypt(table_content)
-            return json.loads(table_content)
+                decrypted_content = self.encryption.decrypt(table_content)
+                return json.loads(decrypted_content)
+            
+            return table_content
         
         with open(self.table_path, "r") as readable_file:
             table_content = readable_file.read()
         
         if decrypt:
-            table_content = self.encryption.decrypt(table_content)
+            decrypted_content = self.encryption.decrypt(table_content)
+            return json.loads(decrypted_content)
         
-        return json.loads(table_content)
+        return table_content
+    
+    def _save(self, dictionary: dict) -> None:
+        """
+        Function to save the current content of the table
+        :param dictionary: The current content of the table as a dictionary
+        """
+
+        dictionary = json.dumps(dictionary)
+        encrypted_content = self.encryption.encrypt(dictionary)
+
+        if not self.web_service_url is None:
+            self._request_web_service("/save?table=" + self.table_name + "&content=" + quote(encrypted_content))
+            return
+        
+        with open(self.table_path, "r") as readable_file:
+            file_content = readable_file.read()
+        
+        file_content = file_content.split("--")[0] + "--" + encrypted_content
+
+        with open(self.table_path, "w") as writeable_file:
+            writeable_file.write(file_content)
