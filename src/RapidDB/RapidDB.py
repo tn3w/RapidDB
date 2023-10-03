@@ -132,7 +132,7 @@ class NoEncryption:
         pass
 
     @property
-    def use_hashing():
+    def use_hashing(self = None):
         return False
     
     def encrypt(self: Optional["NoEncryption"] = None, plain_text: str = None) -> str:
@@ -154,12 +154,15 @@ class SymmetricEncryption:
 
         if password is None:
             password = secrets.token_urlsafe(64)
+        
+        if isinstance(password, str):
+            password = password.encode()
 
-        self.password = password.encode()
+        self.password = password
         self.salt_length = salt_length
 
     @property
-    def use_hashing():
+    def use_hashing(self = None):
         return True
 
     def encrypt(self, plain_text: str) -> str:
@@ -242,7 +245,7 @@ class AsymmetricEncryption:
             self.priv_key = None
 
     @property
-    def use_hashing():
+    def use_hashing(self = None):
         return True
 
     def generate_keys(self, key_size: int = 2048) -> "AsymmetricEncryption":
@@ -327,7 +330,8 @@ class AsymmetricEncryption:
 
         return plain_text
 
-CURRENT_DIR: Final[str] = pkg_resources.resource_filename("RapidDB", "")
+#CURRENT_DIR: Final[str] = pkg_resources.resource_filename("RapidDB", "")
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 TABLES_DIR: Final[str] = os.path.join(CURRENT_DIR, "tables")
 RANDOM_VERBS: Final[list] = ["explore", "discover", "decorate", "whisper", "navigate", "calculate", "promote", "activate", "celebrate", "entertain", "harvest", "invent", "evaluate", "illuminate", "participate", "introduce", "persuade", "generate", "negotiate", "appreciate", "complement", "enthusiasm", "investigate", "encourage", "volunteer", "photograph", "celebration", "accompany", "experience", "understand", "accomplish", "demonstrate", "celebrity", "experience", "strengthen", "criticize", "communicate", "contribute", "distinguish", "elaborate", "illustrate", "manipulate", "acknowledge", "accelerate", "celebratory", "determination", "negotiation"]
 RANDOM_NOUNS: Final[list] = ["banana", "elephant", "octopus", "giraffe", "sunshine", "computer", "keyboard", "waterfall", "cucumber", "butterfly", "umbrella", "cooker", "mountain", "firework", "sandwich", "backpack", "calendar", "laughter", "pineapple", "scissors", "sweater", "happiness", "telescope", "notebook", "telephone", "suitcase", "chocolate", "elephant", "sunflower", "sunrise", "helicopter", "treasure", "alligator", "volcano", "whale", "elephant", "tiger", "ocean", "zebra", "dolphin", "moonlight", "hamburger", "sunscreen", "umbrella", "rainbow", "guitar", "keyboard"]
@@ -353,13 +357,14 @@ class DB(dict):
         super().__init__()
 
         encryption_class_name = encryption.__class__.__name__
-        tables = self.tables
 
         self.encryption = encryption
         self.encryption_class_name = encryption_class_name
         self.web_service_url = web_service_url
         self.authorization_password = authorization_password
         self.tables_directory = tables_directory
+
+        tables = self.tables
 
         if not table_name in [table["name"] for table in tables]:
             if table_name == None:
@@ -369,19 +374,19 @@ class DB(dict):
                     table_name = random.choice(RANDOM_VERBS) + "_" + random.choice(RANDOM_NOUNS)
 
             self.table_name = table_name
-            self.table_path = os.path.join(self.tables_directory, table_name, ".table")
+            self.table_path = os.path.join(self.tables_directory, table_name + ".table")
 
             with open(self.table_path, "w") as writeable_file:
-                writeable_file.write(encryption_class_name + "--")
+                writeable_file.write(encryption_class_name + "--&&--")
         
         else:
             self.table_name = table_name
-            self.table_path = os.path.join(self.tables_directory, table_name, ".table")
+            self.table_path = os.path.join(self.tables_directory, table_name + ".table")
 
             with open(self.table_path, "r") as readable_file:
                 file_content = readable_file.read()
             
-            if not encryption_class_name == file_content.split("--")[0]:
+            if not encryption_class_name == file_content.split("--&&--")[0]:
                 raise Exception("[Database Encryption Exception] The specified encryption class cannot decrypt the given table / the table was not created with it.")
     
     @property
@@ -402,10 +407,33 @@ class DB(dict):
                 
                 files.append({
                     "name": file.replace(".table", ""),
-                    "encryption": file_content.split("--")[0]
+                    "encryption": file_content.split("--&&--")[0]
                 })
         
         return files
+    
+    @property
+    def table_content(self):
+        """
+        Function to load the content of the current table
+        """
+
+        if not self.web_service_url is None:
+            table_content = self._request_web_service("/get?table=" + self.table_name)
+            if table_content == "":
+                return {}
+            table_content = json.loads(table_content)
+            return table_content
+        
+        with open(self.table_path, "r") as readable_file:
+            table_content = readable_file.read().split("--&&--")[1]
+        
+        if table_content == "":
+            return {}
+        
+        table_content = json.loads(table_content)
+
+        return table_content
     
     def _request_web_service(self, endpoint: str):
         """
@@ -430,29 +458,31 @@ class DB(dict):
         
         return response
 
-    def _get(self, decrypt: bool = False) -> Union[dict, str]:
+    def _decrypt_value(self, value: str) -> Union[dict, list, set, int, float, bool, bytes]:
         """
-        Function to get the content of the current table
-        :param decrypt: Whether to decrypt the table
+        Decrypts a Value
         """
 
-        if not self.web_service_url is None:
-            table_content = self._request_web_service("/get?table=" + self.table_name)
+        decrypted_value = self.encryption.decrypt(value)
 
-            if decrypt:
-                decrypted_content = self.encryption.decrypt(table_content)
-                return json.loads(decrypted_content)
-            
-            return table_content
-        
-        with open(self.table_path, "r") as readable_file:
-            table_content = readable_file.read()
-        
-        if decrypt:
-            decrypted_content = self.encryption.decrypt(table_content)
-            return json.loads(decrypted_content)
-        
-        return table_content
+        _type = decrypted_value.split("//&&//")[1]
+        decrypted_value = decrypted_value.split("//&&//")[0]
+        type_mappings = {"dict": json.loads, "list": json.loads, "set": json.loads, "int": int, "float": float, "bool": bool, "bytes": str.encode, }
+
+        return type_mappings.get(_type, str)(decrypted_value)
+
+    def _encrypt_value(self, value: Union[dict, list, set, int, float, bool, bytes]) -> str:
+        """
+        Encrypts a Value
+        """
+
+        type_mappings = {"dict": json.dumps, "list": json.dumps, "set": json.dumps, "bytes": bytes.decode, }
+        _type = type(value).__name__
+
+        value = type_mappings.get(_type, str)(value) + "//&&//" + _type
+
+        encrypted_value = self.encryption.encrypt(value)
+        return encrypted_value
     
     def _save(self, dictionary: dict) -> None:
         """
@@ -461,16 +491,61 @@ class DB(dict):
         """
 
         dictionary = json.dumps(dictionary)
-        encrypted_content = self.encryption.encrypt(dictionary)
 
         if not self.web_service_url is None:
-            self._request_web_service("/save?table=" + self.table_name + "&content=" + quote(encrypted_content))
+            self._request_web_service("/save?table=" + self.table_name + "&content=" + quote(dictionary))
             return
         
         with open(self.table_path, "r") as readable_file:
             file_content = readable_file.read()
         
-        file_content = file_content.split("--")[0] + "--" + encrypted_content
+        file_content = file_content.split("--&&--")[0] + "--&&--" + dictionary
 
         with open(self.table_path, "w") as writeable_file:
             writeable_file.write(file_content)
+    
+    def __getitem__(self, key):
+        table_content = self.table_content
+
+        key_value = None
+        for table_key, table_value in table_content.items():
+            if self.encryption.use_hashing:
+                if Hashing().compare(key, table_key):
+                    key_value = table_value
+                    break
+            else:
+                if key == table_key:
+                    key_value = table_value
+                    break
+        
+        if key_value is None:
+            return None
+        
+        return self._decrypt_value(key_value)
+    
+    def __setitem__(self, key, value):
+        table_content = self.table_content
+
+        key_hash = None
+        for table_key, _ in table_content.items():
+            if self.encryption.use_hashing:
+                if Hashing().compare(key, table_key):
+                    key_hash = table_key
+                    break
+            else:
+                if key == table_key:
+                    key_hash = table_key
+                    break
+        
+        if key_hash is None:
+            if self.encryption.use_hashing:
+                key = Hashing().hash(key)
+        else:
+            key = key_hash
+        
+        value = self._encrypt_value(value)
+
+        table_content = self.table_content
+        table_content[key] = value
+
+        self._save(table_content)
