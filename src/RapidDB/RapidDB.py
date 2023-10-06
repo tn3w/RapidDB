@@ -4,8 +4,9 @@ import random
 import secrets
 import requests
 import pkg_resources
-from threading import Lock
 from urllib.parse import quote
+from flask import Flask, request
+from threading import Lock, Thread
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes, padding, serialization
@@ -363,7 +364,10 @@ class DB(dict):
         self.authorization_password = authorization_password
         self.tables_directory = tables_directory
 
-        tables = self.tables
+        if not self.web_service_url:
+            tables = self._request_web_service("/tables")
+        else:
+            tables = DB.tables(self.tables_directory)
 
         if not table_name in [table["name"] for table in tables]:
             if table_name == None:
@@ -375,33 +379,35 @@ class DB(dict):
             self.table_name = table_name
             self.table_path = os.path.join(self.tables_directory, table_name + ".table")
 
-            with open(self.table_path, "w") as writeable_file:
-                writeable_file.write(encryption_class_name + "--&&--")
+            if not self.web_service_url is None:
+                self._request_web_service("/set?table=" + self.table_name + "&content=" + quote(encryption_class_name + "--&&--"))
+            else:
+                with open(self.table_path, "w") as writeable_file:
+                    writeable_file.write(encryption_class_name + "--&&--")
         
         else:
             self.table_name = table_name
             self.table_path = os.path.join(self.tables_directory, table_name + ".table")
-
-            with open(self.table_path, "r") as readable_file:
-                file_content = readable_file.read()
+            
+            if not self.web_service_url is None:
+                file_content = self._request_web_service("/get?table=" + self.table_name)
+            else:
+                with open(self.table_path, "r") as readable_file:
+                    file_content = readable_file.read()
             
             if not encryption_class_name == file_content.split("--&&--")[0]:
                 raise Exception("[Database Encryption Exception] The specified encryption class cannot decrypt the given table / the table was not created with it.")
     
-    @property
-    def tables(self):
+    @staticmethod
+    def tables(tables_directory: str = TABLES_DIR):
         """
         Returns all tables
+        :param tables_directory: Specifies where tables are be stored
         """
-
-        if not self.web_service_url is None:
-            response = self._request_web_service("/tables")
-            return response["tables"]
-        
         files = []
-        for file in os.listdir(self.tables_directory):
+        for file in os.listdir(tables_directory):
             if file.endswith(".table"):
-                with open(os.path.join(self.tables_directory, file), "r") as readable_file:
+                with open(os.path.join(tables_directory, file), "r") as readable_file:
                     file_content = readable_file.read()
                 
                 files.append({
@@ -411,20 +417,14 @@ class DB(dict):
         
         return files
     
-    @property
-    def table_content(self):
+    @staticmethod
+    def _load(table_path):
         """
-        Function to load the content of the current table
+        Function to load the content of a table
+        :param table_path: The Path to the Table
         """
-
-        if not self.web_service_url is None:
-            table_content = self._request_web_service("/get?table=" + self.table_name)
-            if table_content == "":
-                return {}
-            table_content = json.loads(table_content)
-            return table_content
         
-        with open(self.table_path, "r") as readable_file:
+        with open(table_path, "r") as readable_file:
             table_content = readable_file.read().split("--&&--")[1]
         
         if table_content == "":
@@ -455,7 +455,7 @@ class DB(dict):
         if not response["status_code"] == 200:
             raise Exception("[WebService Request Exception] " + response["error"])
         
-        return response
+        return response["content"]
 
     def _decrypt_value(self, value: str) -> Union[dict, list, set, int, float, bool, bytes]:
         """
@@ -492,7 +492,7 @@ class DB(dict):
         dictionary = json.dumps(dictionary)
 
         if not self.web_service_url is None:
-            self._request_web_service("/save?table=" + self.table_name + "&content=" + quote(dictionary))
+            self._request_web_service("/set?table=" + self.table_name + "&content=" + quote(dictionary))
             return
         
         with open(self.table_path, "r") as readable_file:
@@ -504,7 +504,14 @@ class DB(dict):
             writeable_file.write(file_content)
     
     def __getitem__(self, key):
-        table_content = self.table_content
+        if not self.web_service_url is None:
+            table_content = self._request_web_service("/get?table=" + self.table_name).split("--&&--")[1]
+            if table_content == "":
+                return {}
+            else:
+                table_content = json.loads(table_content)
+        else:
+            table_content = DB._load(self.table_path)
 
         key_value = None
         for table_key, table_value in table_content.items():
@@ -523,7 +530,14 @@ class DB(dict):
         return self._decrypt_value(key_value)
     
     def __setitem__(self, key, value):
-        table_content = self.table_content
+        if not self.web_service_url is None:
+            table_content = self._request_web_service("/get?table=" + self.table_name).split("--&&--")[1]
+            if table_content == "":
+                table_content = {}
+            else:
+                table_content = json.loads(table_content)
+        else:
+            table_content = DB._load(self.table_path)
 
         key_hash = None
         for table_key, _ in table_content.items():
@@ -544,7 +558,85 @@ class DB(dict):
         
         value = self._encrypt_value(value)
 
-        table_content = self.table_content
         table_content[key] = value
 
-        self._save(table_content)
+        if not self.web_service_url is None:
+            self._request_web_service("/set?table=" + self.table_name + "&content=" + quote(self.encryption_class_name + "--&&--" + json.dumps(table_content)))
+        else:
+            self._save(table_content)
+
+class WebService:
+    def __init__(self, authorization_password: Optional[str] = None,
+                 tabels_directory: Optional[str] = TABLES_DIR):
+        """
+        :param authorization_password: Gives access only to requests with a hash of the password given here
+        :param tables_directory: Specifies where tables should be stored
+        """
+
+        self.authorization_password = authorization_password
+        self.tables_directory = tabels_directory
+        app = Flask("RapidDB")
+
+        @app.route("/")
+        def index():
+            if not self._is_authorized:
+                return {"status_code": 401, "error": "Unauthorized - The client must authorize itself to receive the requested resource."}, 401
+            return "RapidDB WebService instance"
+        
+        @app.route("/tables")
+        def tables():
+            if not self._is_authorized:
+                return {"status_code": 401, "error": "Unauthorized - The client must authorize itself to receive the requested resource."}, 401
+            return {"status_code": 200, "error": None, "content": DB.tables(self.tables_directory)}
+        
+        @app.route("/get")
+        def get():
+            if not self._is_authorized:
+                return {"status_code": 401, "error": "Unauthorized - The client must authorize itself to receive the requested resource."}, 401
+            table_name = request.args.get("table")
+            if table_name is None:
+                return {"status_code": 400, "error": "Bad Request - The 'table' argument was not passed by the client."}, 400
+            table_path = os.path.join(self.tables_directory, table_name + ".tabel")
+            if not os.path.isfile(table_path):
+                return {"status_code": 400, "error": "Bad Request - The client has given a table with the argument 'table' which does not exist."}, 400
+            with open(table_path, "r") as readable_file:
+                table_content = readable_file.read()
+            return {"status_code": 200, "error": None, "content": table_content}
+        
+        @app.route("/set")
+        def set():
+            if not self._is_authorized:
+                return {"status_code": 401, "error": "Unauthorized - The client must authorize itself to receive the requested resource."}, 401
+            table_name = request.args.get("table")
+            if table_name is None:
+                return {"status_code": 400, "error": "Bad Request - The 'table' argument was not passed by the client."}, 400
+            table_content = request.args.get("content")
+            if table_content is None:
+                return {"status_code": 400, "error": "Bad Request - The 'table_content' argument was not passed by the client."}, 400
+            table_path = os.path.join(self.tables_directory, table_name + ".tabel")
+            with open(table_path, "w") as writeable_file:
+                writeable_file.write(table_content)
+            return {"status_code": 200, "error": None, "content": None}
+        
+        self.app = app
+    
+    def _is_authorized(self):
+        return True
+    
+    def run(self, host: str, port: int, as_thread: bool = False):
+        """
+        Runs the database online
+        :param host: See Flask().run
+        :param port: See Flask().run
+        :param as_thread: If True the Flask app is started in the background
+        """
+
+        def start_app():
+            self.app.run(host, port)
+
+        if as_thread:
+            thread = Thread(target=start_app)
+            thread.start()
+            return
+        
+        start_app()
